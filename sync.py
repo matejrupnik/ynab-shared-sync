@@ -1,11 +1,10 @@
 import sys
-
 import requests
 import datetime
 import os
-from dotenv import load_dotenv
+import dotenv
 
-load_dotenv()
+dotenv.load_dotenv()
 
 API_BASE_URL = "https://api.ynab.com/v1"
 
@@ -22,91 +21,101 @@ def get_headers(api_key):
     }
 
 def get_budget(api_key, budget_id):
-    url = f"{API_BASE_URL}/budgets/{budget_id}"
-
-    response = requests.get(url, headers=get_headers(api_key))
-
-    if response.status_code == 200:
-        return response.json()["data"]["budget"]
-    else:
-        print(f"Error retrieving budget: {response.status_code}")
+    response = requests.get(f"{API_BASE_URL}/budgets/{budget_id}", headers=get_headers(api_key))
+    if not response.status_code == 200:
         print(response.text)
-        return []
+        sys.exit(1)
+
+    budget = response.json()["data"]["budget"]
+    categories = budget["categories"]
+    payees = budget["payees"]
+    accounts = budget["accounts"]
+
+    bank_account_id = ""
+    payee_reimbursements_id = ""
+    category_reimbursements_id = ""
+
+    for account in accounts:
+        if account["name"].lower() == "Bank".lower():
+            bank_account_id = account["id"]
+            break
+
+    for payee in payees:
+        if payee["name"] and "Reimbursements".lower() in payee["name"].lower():
+            payee_reimbursements_id = payee["id"]
+            break
+
+    for category in categories:
+        if category["name"] and "Reimbursements".lower() in category["name"].lower():
+            category_reimbursements_id = category["id"]
+            break
+
+    return bank_account_id, payees, categories, payee_reimbursements_id, category_reimbursements_id
 
 
-def get_transactions(api_key, budget_id, since_date=None):
-    url = f"{API_BASE_URL}/budgets/{budget_id}/transactions"
-    
-    params = {}
-    if since_date:
-        params["since_date"] = since_date
-    
-    response = requests.get(url, headers=get_headers(api_key), params=params)
+def get_transactions(api_key, budget_id, since_date):
+    response = requests.get(f"{API_BASE_URL}/budgets/{budget_id}/transactions", headers=get_headers(api_key), params={"since_date": since_date})
     
     if response.status_code == 200:
         return response.json()["data"]["transactions"]
     else:
-        print(f"Error retrieving transactions: {response.status_code}")
         print(response.text)
-        return []
+        sys.exit(1)
 
 def identify_sync_transactions(from_transactions, to_transactions, split):
     valid_to_transactions = {}
+    valid_from_transactions = {}
+
     for transaction in to_transactions:
         subtransactions = transaction.get("subtransactions")
         if len(subtransactions) != 2:
             continue
 
         for index, subtransaction in enumerate(subtransactions):
-            if subtransaction.get("payee_name") and "Reimbursements".lower() in subtransaction.get("payee_name").lower() and subtransaction.get("amount") > 0:
+            payee_name = subtransaction.get("payee_name")
+            split_amount = subtransaction.get("amount")
 
-                main_subtransaction = subtransactions[0] if index == 1 else subtransactions[1]
-                date = transaction.get("date")
-                payee = main_subtransaction.get("payee_name")
-                split_amount = subtransaction.get("amount")
+            if not payee_name or not "reimbursements" in payee_name.lower() or not split_amount > 0: continue
+            fingerprint = f"{transaction.get('date')}_-{split_amount}"
 
-                fingerprint = f"{date}_-{split_amount}"
+            if "--" in fingerprint:
+                print(f"double negative? {fingerprint}")
+                sys.exit(1)
 
-                if "--" in fingerprint:
-                    print(f"double negative? {fingerprint}")
-                    sys.exit(1)
+            if fingerprint in valid_to_transactions:
+                print(f"duplicate transaction from {fingerprint}")
+                sys.exit(1)
 
-                if fingerprint in valid_to_transactions:
-                    print(f"duplicate transaction from {fingerprint}")
-                    sys.exit(1)
+            valid_to_transactions[fingerprint] = transaction
+            break
 
-                valid_to_transactions[fingerprint] = transaction
-                break
-
-    valid_from_transactions = {}
     for transaction in from_transactions:
         subtransactions = transaction.get("subtransactions")
         if len(subtransactions) != 2:
             continue
 
         for index, subtransaction in enumerate(subtransactions):
-            if subtransaction.get("payee_name") and "Reimbursements".lower() in subtransaction.get("payee_name").lower() and subtransaction.get("amount") < 0:
-                main_subtransaction = subtransactions[0] if index == 1 else subtransactions[1]
-                date = transaction.get("date")
-                payee = main_subtransaction.get("payee_name")
-                split_amount = subtransaction.get("amount")
+            payee_name = subtransaction.get("payee_name")
+            split_amount = subtransaction.get("amount")
 
-                fingerprint = f"{date}_{split_amount}"
+            if not payee_name or not "reimbursements" in payee_name.lower() or not split_amount < 0: continue
+            fingerprint = f"{transaction.get('date')}_{split_amount}"
+            calculated_ratio = round(((100 - split) / 100) * transaction.get("amount"), -1)
 
-                if round(((100 - split) / 100) * transaction.get("amount"), -1) != split_amount:
-                    print(f"Transaction amount does not match split amount. {fingerprint} {round(((100 - split) / 100) * transaction.get('amount'), -1)}")
-                    sys.exit(1)
+            if calculated_ratio != split_amount:
+                print(f"Transaction amount does not match split amount. {fingerprint} {calculated_ratio}")
+                sys.exit(1)
 
-                if fingerprint in valid_from_transactions:
-                    print(f"duplicate transaction to {fingerprint}")
-                    sys.exit(1)
+            if fingerprint in valid_from_transactions:
+                print(f"duplicate transaction to {fingerprint}")
+                sys.exit(1)
 
-                if fingerprint in valid_to_transactions:
-                    print(f"skipping {fingerprint}")
-                    break
-
-                valid_from_transactions[fingerprint] = transaction
+            if fingerprint in valid_to_transactions:
+                print(f"skipping {fingerprint}")
                 break
+
+            valid_from_transactions[fingerprint] = transaction
+            break
 
     print(f"valid from transactions: {valid_from_transactions.keys()}")
 
@@ -121,10 +130,6 @@ def create_mirrored_transaction(
         to_category_id
 ):
     subtransactions = transaction.get("subtransactions")
-    if len(subtransactions) != 2:
-        print("this should not happen")
-        sys.exit(1)
-
     for index, subtransaction in enumerate(subtransactions):
         if subtransaction.get("payee_name") and "Reimbursements".lower() in subtransaction.get("payee_name").lower():
             main_subtransaction = subtransactions[0] if index == 1 else subtransactions[1]
@@ -164,35 +169,12 @@ def create_mirrored_transaction(
 
             return mirrored_transaction
 
-def get_budget_details(budget):
-    bank_account_id = ""
-    payee_reimbursements_id = ""
-    category_reimbursements_id = ""
-    payees = budget.get("payees")
-    categories = budget.get("categories")
-
-    for account in budget["accounts"]:
-        if account["name"].lower() == "Bank".lower():
-            bank_account_id = account["id"]
-
-    for payee in budget["payees"]:
-        if payee["name"] and "Reimbursements".lower() in payee["name"].lower():
-            payee_reimbursements_id = payee["id"]
-
-    for category in budget["categories"]:
-        if category["name"] and "Reimbursements".lower() in category["name"].lower():
-            category_reimbursements_id = category["id"]
-
-    return bank_account_id, payees, categories, payee_reimbursements_id, category_reimbursements_id
-
 def sync_budgets():
     print("Starting YNAB budget sync for last 30 days...")
     since_date = (datetime.datetime.now() - datetime.timedelta(days=30)).strftime("%Y-%m-%d")
 
-    person1_budget_details = get_budget_details(get_budget(PERSON1_API_KEY, PERSON1_BUDGET_ID))
-    person2_budget_details = get_budget_details(get_budget(PERSON2_API_KEY, PERSON2_BUDGET_ID))
-
-    print(person1_budget_details)
+    person1_budget_details = get_budget(PERSON1_API_KEY, PERSON1_BUDGET_ID)
+    person2_budget_details = get_budget(PERSON2_API_KEY, PERSON2_BUDGET_ID)
 
     person1_transactions = get_transactions(PERSON1_API_KEY, PERSON1_BUDGET_ID, since_date)
     person2_transactions = get_transactions(PERSON2_API_KEY, PERSON2_BUDGET_ID, since_date)
@@ -200,20 +182,14 @@ def sync_budgets():
     person1_sync_transactions = identify_sync_transactions(person1_transactions, person2_transactions, int(PERSON1_SPLIT))
     person2_sync_transactions = identify_sync_transactions(person2_transactions, person1_transactions, 100 - int(PERSON1_SPLIT))
 
-    confirm = input(f"Is ok? (Y/N)")
-    if confirm.lower() != 'y':
-        sys.exit(1)
+    if input(f"Is ok? (Y/N)").lower() != 'y': sys.exit(1)
 
     person1_mirrored_transactions = []
 
-    for transaction in person1_sync_transactions:
+    for _, transaction in person1_sync_transactions:
         bank_account_id, payees, categories, payee_reimbursements_id, category_reimbursements_id = person2_budget_details
-        actual_transaction = person1_sync_transactions[transaction]
 
-        subtransactions = actual_transaction.get("subtransactions")
-        if len(subtransactions) != 2:
-            print("this should not happen")
-            sys.exit(1)
+        subtransactions = transaction.get("subtransactions")
 
         for index, subtransaction in enumerate(subtransactions):
             if subtransaction.get("payee_name") and "Reimbursements".lower() in subtransaction.get("payee_name").lower():
@@ -235,7 +211,7 @@ def sync_budgets():
                         break
 
                 person1_mirrored_transactions.append(create_mirrored_transaction(
-                    actual_transaction,
+                    transaction,
                     bank_account_id,
                     payee_reimbursements_id,
                     category_reimbursements_id,
@@ -248,14 +224,7 @@ def sync_budgets():
     print(person1_mirrored_transactions)
 
     if person1_mirrored_transactions:
-        url = f"{API_BASE_URL}/budgets/{PERSON2_BUDGET_ID}/transactions"
-        response = requests.post(url, headers=get_headers(PERSON2_API_KEY), json={"transactions": person1_mirrored_transactions})
-
-        if response.status_code == 201:
-            print("Successfully created mirrored transactions")
-        else:
-            print(f"Error creating mirrored transaction: {response.status_code}")
-            print(response.text)
+        post_transactions(PERSON2_BUDGET_ID, PERSON2_API_KEY, person1_mirrored_transactions)
 
     person2_mirrored_transactions = []
 
@@ -264,9 +233,6 @@ def sync_budgets():
         actual_transaction = person2_sync_transactions[transaction]
 
         subtransactions = actual_transaction.get("subtransactions")
-        if len(subtransactions) != 2:
-            print("this should not happen")
-            sys.exit(1)
 
         for index, subtransaction in enumerate(subtransactions):
             if subtransaction.get("payee_name") and "Reimbursements".lower() in subtransaction.get("payee_name").lower():
@@ -301,16 +267,18 @@ def sync_budgets():
     print(person2_mirrored_transactions)
 
     if person2_mirrored_transactions:
-        url = f"{API_BASE_URL}/budgets/{PERSON1_BUDGET_ID}/transactions"
-        response = requests.post(url, headers=get_headers(PERSON1_API_KEY), json={"transactions": person2_mirrored_transactions})
-
-        if response.status_code == 201:
-            print("Successfully created mirrored transactions")
-        else:
-            print(f"Error creating mirrored transaction: {response.status_code}")
-            print(response.text)
+        post_transactions(PERSON1_BUDGET_ID, PERSON1_API_KEY, person2_mirrored_transactions)
 
     print("Budget sync completed.")
+
+def post_transactions(budget_id, api_key, transactions):
+    response = requests.post(f"{API_BASE_URL}/budgets/{budget_id}/transactions", headers=get_headers(api_key), json={"transactions": transactions})
+
+    if response.status_code == 201:
+        print("Successfully created mirrored transactions")
+    else:
+        print(f"Error creating mirrored transaction: {response.status_code}")
+        print(response.text)
 
 if __name__ == "__main__":
     if not all([PERSON1_API_KEY, PERSON2_API_KEY, PERSON1_BUDGET_ID, PERSON2_BUDGET_ID]):
