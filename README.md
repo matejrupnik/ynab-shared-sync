@@ -147,3 +147,5 @@ The script uses colored flags to track the status of transactions:
 - **Missing variables error**: Make sure your .env file contains all required values
 - **API connection errors**: Check that your API keys are correct and not expired
 - **Matching errors**: If the script can't find a matching payee or category, it will ask you to provide one
+
+Disclaimer: Please use at your own risk. This tool is neither officially supported by YNAB (the company) nor by YNAB (the software) in any way. Use of this tool could introduce problems into your budget that YNAB, through its official support channels, will not be able to troubleshoot or fix.
