@@ -1,3 +1,4 @@
+import json
 import sys
 import requests
 import datetime
@@ -238,7 +239,10 @@ def sync_budgets():
     person2_mirrored_transactions = []
     person2_updated_transactions = []
 
-    for transaction in get_transactions(PERSON1_API_KEY, PERSON1_BUDGET_ID, since_date):
+    will_be_processed_transactions_person_1 = get_transactions(PERSON1_API_KEY, PERSON1_BUDGET_ID, since_date)
+    will_be_processed_transactions_person_2 = get_transactions(PERSON2_API_KEY, PERSON2_BUDGET_ID, since_date)
+
+    for transaction in will_be_processed_transactions_person_1:
         to_payee = match(transaction.get("payee_name"), person2_payees, "payee")
         to_category = match(transaction.get("category_name"), person2_categories, "category")
 
@@ -263,7 +267,7 @@ def sync_budgets():
             )
         )
 
-    for transaction in get_transactions(PERSON2_API_KEY, PERSON2_BUDGET_ID, since_date):
+    for transaction in will_be_processed_transactions_person_2:
         to_payee = match(transaction.get("payee_name"), person1_payees, "payee")
         to_category = match(transaction.get("category_name"), person1_categories, "category")
 
@@ -304,7 +308,13 @@ def sync_budgets():
     for transaction in person2_mirrored_transactions:
         print_status(transaction, person1_payees, person1_categories)
 
-    if input(f"Is ok? (Y/N)").lower() != 'y': sys.exit(1)
+    if input(f"Ok? (Y/N){chr(10)}").lower() != 'y': sys.exit(1)
+
+    with open("history.txt", "a") as f:
+        f.write(f"{chr(10)}Person 1 processed transactions:{chr(10)}")
+        f.write(json.dumps(will_be_processed_transactions_person_1))
+        f.write(f"{chr(10)}Person 2 processed transactions:{chr(10)}")
+        f.write(json.dumps(will_be_processed_transactions_person_2))
 
     if person1_updated_transactions and person1_mirrored_transactions:
         patch_transactions(PERSON1_BUDGET_ID, PERSON1_API_KEY, person1_updated_transactions)
@@ -348,10 +358,10 @@ def post_transactions(budget_id, api_key, transactions):
         print(response.text)
 
 if __name__ == "__main__":
-    if not all([PERSON1_API_KEY, PERSON2_API_KEY, PERSON1_BUDGET_ID, PERSON2_BUDGET_ID]):
+    if not all([PERSON1_API_KEY, PERSON2_API_KEY, PERSON1_BUDGET_ID, PERSON2_BUDGET_ID, PERSON1_SPLIT]):
         print(
             "Missing .env variables: "
-            "PERSON1_API_KEY, PERSON2_API_KEY, PERSON1_BUDGET_ID, PERSON2_BUDGET_ID"
+            "PERSON1_API_KEY, PERSON2_API_KEY, PERSON1_BUDGET_ID, PERSON2_BUDGET_ID, PERSON1_SPLIT"
         )
         sys.exit(1)
 
