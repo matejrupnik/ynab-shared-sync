@@ -1,3 +1,5 @@
+# TODO s for skip remove maybe,if no payee/category, just append to memo
+# also either remove the last confirm prompt or make it glanceable
 import json
 import sys
 import requests
@@ -77,7 +79,6 @@ def get_transactions(api_key, budget_id, since_date):
     for transaction in response.json()["data"]["transactions"]:
         if transaction["flag_color"] != "red": continue
         valid_from_transactions.append(transaction)
-        break
 
     return valid_from_transactions
 
@@ -127,7 +128,7 @@ def create_mirrored_transaction(
         "date": o_transaction["date"],
         "cleared": "cleared",
         "approved": True,
-        "memo": "SYNCED - " + o_transaction["memo"],
+        "memo": "SYNCED - " + o_transaction["memo"] if o_transaction["memo"] else '/',
         "amount": 0,
         "subtransactions": [
             {
