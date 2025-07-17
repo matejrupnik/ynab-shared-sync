@@ -77,7 +77,13 @@ def get_transactions(api_key, budget_id, since_date):
     valid_from_transactions = []
 
     for transaction in response.json()["data"]["transactions"]:
-        if transaction["flag_color"] != "red": continue
+        if transaction["flag_color"] != None or transaction["amount"] > 0: continue
+        if "bank" not in transaction["account_name"].lower() and "cash" not in transaction["account_name"].lower():
+            if "reimbursement" not in transaction["account_name"].lower():
+                print(transaction)
+                print("Transaction not in known account")
+                sys.exit(1)
+            else: continue
         valid_from_transactions.append(transaction)
 
     return valid_from_transactions
